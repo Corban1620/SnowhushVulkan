@@ -9,13 +9,15 @@ name = "snowhush"
 path = "src/main.rs"
 
 [dependencies]
+wayland-egl = "0.32"
+wgpu = "0.20"
+pollster = "0.3"
+bytemuck = { version = "1.14", features = ["derive"] }
+
 snowhush-core = { path = "../core" }
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
 wayland-client = "0.31"
-wayland-egl = "0.32"
-khronos-egl = { version = "6", features = ["dynamic"] }
 libloading = "0.8"
-glow = "0.18"
 calloop = { version = "0.14", features = ["signals"] }
 calloop-wayland-source = "0.4"
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }
@@ -24,6 +26,7 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 image = { version = "0.25", default-features = false, features = ["jpeg", "png", "webp"] }
 libc = "0.2"
+raw-window-handle = "0.6"
 
 [profile.release]
 lto = true

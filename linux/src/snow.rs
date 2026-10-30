@@ -268,6 +268,19 @@ impl App {
         if self.locked {
             return Some(chores);
         }
+
+        let mut fully_idle = true;
+        for screen in &self.screens {
+            if screen.simulation.sprite_count() > 0 || screen.simulation.has_snow() && screen.idle_frames < 2 {
+                fully_idle = false;
+                break;
+            }
+        }
+
+        if fully_idle {
+            return None; // Park the thread completely when idle
+        }
+
         let frame = self.screens.iter().map(|screen| screen.next_due.saturating_duration_since(now)).min();
         Some(frame.map_or(chores, |frame| frame.min(chores)))
     }

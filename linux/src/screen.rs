@@ -47,7 +47,7 @@ pub struct Screen {
     shelf: Option<Shelf>,
     size: (u32, u32),
     last_step: Option<Instant>,
-    idle_frames: u32,
+    pub idle_frames: u32,
     interactive_rate: u32,
     surfaces: Vec<WindowSurface>,
     windows_seen: u64,

@@ -1,0 +1,6 @@
+[target.'cfg(all(target_os = "linux", target_arch = "x86_64"))']
+rustflags = [
+    "-C", "target-cpu=native",      # Compiles cleanly on the host system
+    "-C", "opt-level=3",            # Maximum optimizations
+    "-C", "codegen-units=1",        # Maximizes compiler optimization scope
+]
