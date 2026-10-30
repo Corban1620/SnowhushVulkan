@@ -63,6 +63,8 @@ pub struct Gpu {
     sprite_bind_group: BindGroup,
 
     compute_pipeline: wgpu::ComputePipeline,
+    particle_buffer: Buffer,
+    physics_bind_group: BindGroup,
     pile_pipeline: RenderPipeline,
     pile_uniform_buffer: Buffer,
     pile_height_buffer: Buffer,
@@ -303,6 +305,56 @@ impl Gpu {
             compilation_options: wgpu::PipelineCompilationOptions::default(),
         });
 
+
+        let particle_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Particle Storage Buffer"),
+            size: (15000 * std::mem::size_of::<Sprite>()) as wgpu::BufferAddress, // Max flakes supported
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // Add this to the physics bind group layout
+        let physics_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Physics Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let physics_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Physics Bind Group"),
+            layout: &physics_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: sprite_uniform_buffer.as_entire_binding(), // share uniforms for now
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: particle_buffer.as_entire_binding(),
+                },
+            ],
+        });
+
         let pile_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
             label: Some("Pile Pipeline Layout"),
             bind_group_layouts: &[&pile_bind_group_layout],
@@ -363,6 +415,8 @@ impl Gpu {
             sprite_bind_group_layout,
             sprite_bind_group,
             compute_pipeline,
+            particle_buffer,
+            physics_bind_group,
             pile_pipeline,
             pile_uniform_buffer,
             pile_height_buffer,
