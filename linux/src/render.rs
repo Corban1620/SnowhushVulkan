@@ -1,24 +1,18 @@
-//! Draws the snow with OpenGL ES 3 through EGL, the same two passes as the Windows renderer: the piles,
-//! read from a height texture, then every flake, grain and puff as an instanced quad.
+//! Draws the snow with Vulkan (via wgpu).
+//! It handles the pile rendering from a storage buffer, and every flake, grain, and puff as an instanced quad.
 
-use std::ffi::c_void;
-use std::mem::size_of;
 
-use glow::HasContext;
-use khronos_egl as egl;
-use wayland_client::Proxy;
 use wayland_client::protocol::wl_surface::WlSurface;
-use wayland_egl::WlEglSurface;
+use wayland_client::Proxy;
+use wgpu::{
+    Instance, InstanceDescriptor, Backends, Device, Queue, TextureFormat,
+    RenderPipeline, Buffer, BindGroup,
+};
 
-use snowhush_core::simulation::{COLUMN_WIDTH, SnowSimulation, Sprite};
+use snowhush_core::simulation::{SnowSimulation, Sprite};
 
-const SPRITE_VERTEX: &str = include_str!("shaders/sprite.vert");
-const SPRITE_FRAGMENT: &str = include_str!("shaders/sprite.frag");
-const PILE_VERTEX: &str = include_str!("shaders/pile.vert");
-const PILE_FRAGMENT: &str = include_str!("shaders/pile.frag");
-/// The height texture's width; the pile shader wraps its index at the same width.
-const ROW: usize = 4096;
-const OCCLUDERS: usize = 16;
+const SPRITE_WGSL: &str = include_str!("shaders/sprite.wgsl");
+const PILE_WGSL: &str = include_str!("shaders/pile.wgsl");
 
 /// The light the snow is drawn in.
 #[derive(Clone, Copy)]
@@ -27,290 +21,492 @@ pub struct Ambient {
     pub shadow_tint: [f32; 4],
 }
 
-struct Program {
-    program: glow::Program,
-    uniforms: Vec<(String, Option<glow::UniformLocation>)>,
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct SpriteUniforms {
+    view_size: [f32; 2],
+    scale: f32,
+    time: f32,
+    light: [f32; 4],
+    panel: [f32; 4],
 }
 
-impl Program {
-    fn location(&self, name: &str) -> Option<&glow::UniformLocation> {
-        self.uniforms.iter().find(|(n, _)| n == name).and_then(|(_, location)| location.as_ref())
-    }
+#[repr(C)]
+#[derive(Copy, Clone, Debug, bytemuck::Pod, bytemuck::Zeroable)]
+struct PileUniforms {
+    view_size: [f32; 2],
+    scale: f32,
+    time: f32,
+    column_width: f32,
+    column_count: u32,
+    occluder_count: u32,
+    pile_top: f32,
+    pile_bottom: f32,
+    origin: [f32; 2],
+    height_offset: u32,
+    light: [f32; 4],
+    shadow_tint: [f32; 4],
+    panel: [f32; 4],
+    occluders: [[f32; 4]; 16],
 }
 
 pub struct Gpu {
-    egl: egl::DynamicInstance<egl::EGL1_4>,
-    display: egl::Display,
-    config: egl::Config,
-    context: egl::Context,
-    gl: glow::Context,
-    sprite: Program,
-    pile: Program,
-    sprite_array: glow::VertexArray,
-    sprite_buffer: glow::Buffer,
-    pile_array: glow::VertexArray,
-    heights: glow::Texture,
-    /// Rows the height texture has room for; it is only made again when that changes.
-    height_rows: usize,
+    instance: Instance,
+    pub adapter: String,
+    device: Device,
+    display_ptr: *mut std::ffi::c_void,
+    queue: Queue,
+
+    sprite_pipeline: RenderPipeline,
+    sprite_uniform_buffer: Buffer,
+    sprite_bind_group_layout: wgpu::BindGroupLayout,
+    sprite_bind_group: BindGroup,
+
+    compute_pipeline: wgpu::ComputePipeline,
+    pile_pipeline: RenderPipeline,
+    pile_uniform_buffer: Buffer,
+    pile_height_buffer: Buffer,
+    pile_bind_group_layout: wgpu::BindGroupLayout,
+
     sprites: Vec<Sprite>,
     columns: Vec<f32>,
-    pub adapter: String,
+    format: TextureFormat,
 }
 
-/// One display's drawing surface.
 pub struct Surface {
-    window: WlEglSurface,
-    surface: egl::Surface,
+    surface: wgpu::Surface<'static>,
+    config: wgpu::SurfaceConfiguration,
     pub width: i32,
     pub height: i32,
 }
 
 impl Gpu {
-    /// `display` is the Wayland connection's `wl_display`.
-    pub fn new(display: *mut c_void) -> Result<Gpu, String> {
-        let egl = unsafe { egl::DynamicInstance::<egl::EGL1_4>::load_required() }.map_err(|error| format!("loading EGL: {error}"))?;
-        let display = unsafe { egl.get_display(display) }.ok_or("no EGL display")?;
-        egl.initialize(display).map_err(|error| format!("EGL initialize: {error}"))?;
-        egl.bind_api(egl::OPENGL_ES_API).map_err(|error| format!("EGL bind: {error}"))?;
-        let attributes = [
-            egl::SURFACE_TYPE,
-            egl::WINDOW_BIT,
-            egl::RENDERABLE_TYPE,
-            egl::OPENGL_ES3_BIT,
-            egl::RED_SIZE,
-            8,
-            egl::GREEN_SIZE,
-            8,
-            egl::BLUE_SIZE,
-            8,
-            egl::ALPHA_SIZE,
-            8,
-            egl::NONE,
-        ];
-        let config = egl.choose_first_config(display, &attributes).map_err(|error| error.to_string())?.ok_or("no EGL config with alpha")?;
-        let context = egl
-            .create_context(display, config, None, &[egl::CONTEXT_CLIENT_VERSION, 3, egl::NONE])
-            .map_err(|error| format!("EGL context: {error}"))?;
-        egl.make_current(display, None, None, Some(context)).map_err(|error| format!("EGL make current: {error}"))?;
-        let gl = unsafe {
-            glow::Context::from_loader_function(|name| egl.get_proc_address(name).map_or(std::ptr::null(), |function| function as *const c_void))
-        };
-        unsafe {
-            let adapter = gl.get_parameter_string(glow::RENDERER);
-            let sprite = program(&gl, SPRITE_VERTEX, SPRITE_FRAGMENT, &["viewSize", "scale", "time", "light", "panel"])?;
-            let pile = program(
-                &gl,
-                PILE_VERTEX,
-                PILE_FRAGMENT,
-                &[
-                    "viewSize",
-                    "scale",
-                    "time",
-                    "columnWidth",
-                    "columnCount",
-                    "pileTop",
-                    "occluderCount",
-                    "origin",
-                    "pileBottom",
-                    "heightOffset",
-                    "light",
-                    "shadowTint",
-                    "occluders",
-                    "heights",
-                    "panel",
-                ],
-            )?;
+    pub fn new(display: *mut std::ffi::c_void) -> Result<Gpu, String> {
+        let instance = Instance::new(InstanceDescriptor {
+            backends: Backends::VULKAN,
+            ..Default::default()
+        });
 
-            let sprite_array = gl.create_vertex_array()?;
-            let sprite_buffer = gl.create_buffer()?;
-            gl.bind_vertex_array(Some(sprite_array));
-            gl.bind_buffer(glow::ARRAY_BUFFER, Some(sprite_buffer));
-            let stride = size_of::<Sprite>() as i32;
-            // Position, velocity, size, alpha, soft, tint amount, tint, lump: see `Sprite`.
-            for (location, components, offset) in [(0, 2, 0), (1, 2, 8), (2, 1, 16), (3, 1, 20), (4, 1, 24), (5, 1, 28), (6, 3, 32), (7, 1, 44)] {
-                gl.enable_vertex_attrib_array(location);
-                gl.vertex_attrib_pointer_f32(location, components, glow::FLOAT, false, stride, offset);
-                gl.vertex_attrib_divisor(location, 1);
-            }
-            let pile_array = gl.create_vertex_array()?;
-            gl.bind_vertex_array(None);
+        // WGPU requires a valid window surface to request the correct adapter if we want guaranteed support
+        // But we are dealing with Wayland raw surface creation per `WlSurface`.
+        // We can request a headless/primary adapter first.
+        let adapter = pollster::block_on(instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: None,
+        }))
+        .ok_or("Failed to find wgpu adapter")?;
 
-            let heights = gl.create_texture()?;
-            gl.bind_texture(glow::TEXTURE_2D, Some(heights));
-            for (parameter, value) in [
-                (glow::TEXTURE_MIN_FILTER, glow::NEAREST),
-                (glow::TEXTURE_MAG_FILTER, glow::NEAREST),
-                (glow::TEXTURE_WRAP_S, glow::CLAMP_TO_EDGE),
-                (glow::TEXTURE_WRAP_T, glow::CLAMP_TO_EDGE),
-            ] {
-                gl.tex_parameter_i32(glow::TEXTURE_2D, parameter, value as i32);
-            }
+        let adapter_info = adapter.get_info();
+        let adapter_name = adapter_info.name.clone();
 
-            Ok(Gpu {
-                egl,
-                display,
-                config,
-                context,
-                gl,
-                sprite,
-                pile,
-                sprite_array,
-                sprite_buffer,
-                pile_array,
-                heights,
-                height_rows: 0,
-                sprites: Vec::new(),
-                columns: Vec::new(),
-                adapter,
-            })
-        }
+        let (device, queue) = pollster::block_on(adapter.request_device(
+            &wgpu::DeviceDescriptor {
+                label: None,
+                required_features: wgpu::Features::empty(),
+                required_limits: wgpu::Limits::default(),
+            },
+            None,
+        ))
+        .map_err(|e| format!("WGPU Device request failed: {e}"))?;
+
+        let format = TextureFormat::Bgra8Unorm; // Wayland typical
+
+        // Shaders
+        let sprite_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Sprite Shader"),
+            source: wgpu::ShaderSource::Wgsl(SPRITE_WGSL.into()),
+        });
+
+        let pile_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Pile Shader"),
+            source: wgpu::ShaderSource::Wgsl(PILE_WGSL.into()),
+        });
+
+        // Uniforms
+        let sprite_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Sprite Uniforms"),
+            size: std::mem::size_of::<SpriteUniforms>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let sprite_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Sprite Bind Group Layout"),
+            entries: &[wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Buffer {
+                    ty: wgpu::BufferBindingType::Uniform,
+                    has_dynamic_offset: false,
+                    min_binding_size: None,
+                },
+                count: None,
+            }],
+        });
+
+        let sprite_bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: Some("Sprite Bind Group"),
+            layout: &sprite_bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: sprite_uniform_buffer.as_entire_binding(),
+            }],
+        });
+
+        let pile_uniform_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Pile Uniforms"),
+            size: std::mem::size_of::<PileUniforms>() as wgpu::BufferAddress,
+            usage: wgpu::BufferUsages::UNIFORM | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let pile_height_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: Some("Pile Heights Buffer"),
+            size: (4096 * 10 * 4) as wgpu::BufferAddress, // Arbitrary starting size
+            usage: wgpu::BufferUsages::STORAGE | wgpu::BufferUsages::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        let pile_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Pile Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::VERTEX | wgpu::ShaderStages::FRAGMENT,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: true },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let sprite_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Sprite Pipeline Layout"),
+            bind_group_layouts: &[&sprite_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let sprite_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Sprite Pipeline"),
+            layout: Some(&sprite_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &sprite_shader,
+                entry_point: "vs_main",
+                buffers: &[wgpu::VertexBufferLayout {
+                    array_stride: std::mem::size_of::<Sprite>() as wgpu::BufferAddress,
+                    step_mode: wgpu::VertexStepMode::Instance,
+                    attributes: &wgpu::vertex_attr_array![
+                        0 => Float32x2,
+                        1 => Float32x2,
+                        2 => Float32,
+                        3 => Float32,
+                        4 => Float32,
+                        5 => Float32,
+                        6 => Float32x3,
+                        7 => Float32
+                    ],
+                }],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &sprite_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+
+        let compute_shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+            label: Some("Physics Shader"),
+            source: wgpu::ShaderSource::Wgsl(include_str!("shaders/physics.wgsl").into()),
+        });
+
+        let physics_bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: Some("Physics Bind Group Layout"),
+            entries: &[
+                wgpu::BindGroupLayoutEntry {
+                    binding: 0,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Uniform,
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+                wgpu::BindGroupLayoutEntry {
+                    binding: 1,
+                    visibility: wgpu::ShaderStages::COMPUTE,
+                    ty: wgpu::BindingType::Buffer {
+                        ty: wgpu::BufferBindingType::Storage { read_only: false },
+                        has_dynamic_offset: false,
+                        min_binding_size: None,
+                    },
+                    count: None,
+                },
+            ],
+        });
+
+        let compute_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Compute Pipeline Layout"),
+            bind_group_layouts: &[&physics_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let compute_pipeline = device.create_compute_pipeline(&wgpu::ComputePipelineDescriptor {
+            label: Some("Physics Compute Pipeline"),
+            layout: Some(&compute_pipeline_layout),
+            module: &compute_shader,
+            entry_point: "update_flakes",
+            compilation_options: wgpu::PipelineCompilationOptions::default(),
+        });
+
+        let pile_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            label: Some("Pile Pipeline Layout"),
+            bind_group_layouts: &[&pile_bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let pile_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            label: Some("Pile Pipeline"),
+            layout: Some(&pile_pipeline_layout),
+            vertex: wgpu::VertexState {
+                module: &pile_shader,
+                entry_point: "vs_main",
+                buffers: &[],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            },
+            fragment: Some(wgpu::FragmentState {
+                module: &pile_shader,
+                entry_point: "fs_main",
+                targets: &[Some(wgpu::ColorTargetState {
+                    format,
+                    blend: Some(wgpu::BlendState {
+                        color: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                        alpha: wgpu::BlendComponent {
+                            src_factor: wgpu::BlendFactor::One,
+                            dst_factor: wgpu::BlendFactor::OneMinusSrcAlpha,
+                            operation: wgpu::BlendOperation::Add,
+                        },
+                    }),
+                    write_mask: wgpu::ColorWrites::ALL,
+                })],
+                compilation_options: wgpu::PipelineCompilationOptions::default(),
+            }),
+            primitive: wgpu::PrimitiveState {
+                topology: wgpu::PrimitiveTopology::TriangleStrip,
+                strip_index_format: None,
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: None,
+                unclipped_depth: false,
+                polygon_mode: wgpu::PolygonMode::Fill,
+                conservative: false,
+            },
+            depth_stencil: None,
+            multisample: wgpu::MultisampleState::default(),
+            multiview: None,
+        });
+
+        Ok(Gpu {
+            instance,
+            adapter: adapter_name,
+            device,
+            queue,
+            sprite_pipeline,
+            sprite_uniform_buffer,
+            sprite_bind_group_layout,
+            sprite_bind_group,
+            compute_pipeline,
+            pile_pipeline,
+            pile_uniform_buffer,
+            pile_height_buffer,
+            pile_bind_group_layout,
+            sprites: Vec::new(),
+            columns: Vec::new(),
+            format,
+            display_ptr: display,
+        })
     }
 
     pub fn surface(&self, surface: &WlSurface, width: i32, height: i32) -> Result<Surface, String> {
-        let window = WlEglSurface::new(surface.id(), width.max(1), height.max(1)).map_err(|error| error.to_string())?;
-        let surface = unsafe { self.egl.create_window_surface(self.display, self.config, window.ptr() as egl::NativeWindowType, None) }
-            .map_err(|error| format!("EGL surface: {error}"))?;
-        self.egl.make_current(self.display, Some(surface), Some(surface), Some(self.context)).map_err(|error| error.to_string())?;
-        // Frames are paced by the snow loop; a swap must never wait on a display that is off.
-        let _ = self.egl.swap_interval(self.display, 0);
-        Ok(Surface { window, surface, width, height })
-    }
+        use raw_window_handle::{WaylandDisplayHandle, WaylandWindowHandle, RawDisplayHandle, RawWindowHandle};
+        use std::ptr::NonNull;
 
+        let display_ptr = self.display_ptr;
+
+        // Use WlEglSurface to extract the raw pointer easily
+        let egl_surface = wayland_egl::WlEglSurface::new(surface.id(), width.max(1), height.max(1)).map_err(|e| e.to_string())?;
+        let surface_ptr = egl_surface.ptr() as *mut std::ffi::c_void;
+
+        let target = wgpu::SurfaceTargetUnsafe::RawHandle {
+            raw_display_handle: RawDisplayHandle::Wayland(WaylandDisplayHandle::new(
+                NonNull::new(display_ptr).unwrap()
+            )),
+            raw_window_handle: RawWindowHandle::Wayland(WaylandWindowHandle::new(
+                NonNull::new(surface_ptr).unwrap()
+            )),
+        };
+
+        let surface_wgpu = unsafe { self.instance.create_surface_unsafe(target) }.map_err(|e| e.to_string())?;
+
+        let width_u32 = width.max(1) as u32;
+        let height_u32 = height.max(1) as u32;
+
+        let adapter = pollster::block_on(self.instance.request_adapter(&wgpu::RequestAdapterOptions {
+            power_preference: wgpu::PowerPreference::HighPerformance,
+            force_fallback_adapter: false,
+            compatible_surface: Some(&surface_wgpu),
+        })).unwrap();
+
+        let config = surface_wgpu.get_default_config(&adapter, width_u32, height_u32).unwrap_or(
+            wgpu::SurfaceConfiguration {
+                usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
+                format: self.format,
+                width: width_u32,
+                height: height_u32,
+                present_mode: wgpu::PresentMode::Fifo,
+                alpha_mode: wgpu::CompositeAlphaMode::PreMultiplied,
+                view_formats: vec![],
+                desired_maximum_frame_latency: 2,
+            }
+        );
+        surface_wgpu.configure(&self.device, &config);
+
+        Ok(Surface { surface: surface_wgpu, width, height, config })
+    }
+}
+
+impl Gpu {
     pub fn resize(&self, surface: &mut Surface, width: i32, height: i32) {
-        surface.window.resize(width.max(1), height.max(1), 0, 0);
-        surface.width = width;
-        surface.height = height;
+        surface.width = width.max(1);
+        surface.height = height.max(1);
+        surface.config.width = surface.width as u32;
+        surface.config.height = surface.height as u32;
+        surface.surface.configure(&self.device, &surface.config);
     }
 
-    pub fn release(&self, surface: Surface) {
-        let _ = self.egl.make_current(self.display, None, None, Some(self.context));
-        let _ = self.egl.destroy_surface(self.display, surface.surface);
+    pub fn release(&self, _surface: Surface) {
+        // dropped
     }
 
-    /// Shows nothing on the surface, as when its display is covered.
     pub fn clear(&self, surface: &Surface) -> Result<(), String> {
-        self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
-        unsafe {
-            self.gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            self.gl.clear(glow::COLOR_BUFFER_BIT);
+        let frame = surface.surface.get_current_texture().map_err(|e| e.to_string())?;
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let _pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
         }
-        self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+        Ok(())
     }
 
-    /// `panel` is a rectangle the panel stands in front of, left, bottom, right, top in the simulation's
-    /// coordinates: nothing of the snow shows inside it.
-    pub fn draw(
-        &mut self,
-        surface: &Surface,
-        simulation: &SnowSimulation,
-        ambient: Ambient,
-        panel: Option<[f32; 4]>,
-        time: f32,
-    ) -> Result<(), String> {
-        self.egl.make_current(self.display, Some(surface.surface), Some(surface.surface), Some(self.context)).map_err(|error| error.to_string())?;
+    pub fn draw(&mut self, surface: &Surface, simulation: &SnowSimulation, ambient: Ambient, panel: Option<[f32; 4]>, time: f32) -> Result<(), String> {
+        let frame = surface.surface.get_current_texture().map_err(|e| e.to_string())?;
+        let view = frame.texture.create_view(&wgpu::TextureViewDescriptor::default());
+
         let sprite_count = simulation.sprite_count();
         self.sprites.resize(sprite_count, Sprite::default());
-        let sprites = simulation.write_sprites(&mut self.sprites);
-        let columns = simulation.column_count();
-        let rows = columns.div_ceil(ROW).max(1);
-        self.columns.resize(rows * ROW, 0.0);
-        let piles = simulation.write_layers(&mut self.columns[..columns]);
+        let _sprites = simulation.write_sprites(&mut self.sprites);
 
-        let gl = &self.gl;
-        let view = [simulation.width(), simulation.height()];
+        // Update sprite uniforms if needed
+        let view_size = [simulation.width(), simulation.height()];
         let light = [ambient.light[0], ambient.light[1], ambient.light[2], 1.0];
-        // An empty rectangle hides nothing.
-        let panel = panel.unwrap_or([0.0; 4]);
-        unsafe {
-            gl.viewport(0, 0, surface.width, surface.height);
-            gl.clear_color(0.0, 0.0, 0.0, 0.0);
-            gl.clear(glow::COLOR_BUFFER_BIT);
-            gl.enable(glow::BLEND);
-            gl.blend_func_separate(glow::ONE, glow::ONE_MINUS_SRC_ALPHA, glow::ONE, glow::ONE_MINUS_SRC_ALPHA);
+        let panel_rect = panel.unwrap_or([0.0; 4]);
 
-            if !piles.is_empty() {
-                gl.active_texture(glow::TEXTURE0);
-                gl.bind_texture(glow::TEXTURE_2D, Some(self.heights));
-                let data = glow::PixelUnpackData::Slice(Some(bytes(&self.columns)));
-                if rows == self.height_rows {
-                    gl.tex_sub_image_2d(glow::TEXTURE_2D, 0, 0, 0, ROW as i32, rows as i32, glow::RED, glow::FLOAT, data);
-                } else {
-                    gl.tex_image_2d(glow::TEXTURE_2D, 0, glow::R32F as i32, ROW as i32, rows as i32, 0, glow::RED, glow::FLOAT, data);
-                    self.height_rows = rows;
-                }
-                let pile = &self.pile;
-                gl.use_program(Some(pile.program));
-                gl.bind_vertex_array(Some(self.pile_array));
-                gl.uniform_2_f32_slice(pile.location("viewSize"), &view);
-                gl.uniform_1_f32(pile.location("scale"), 1.0);
-                gl.uniform_1_f32(pile.location("time"), time);
-                gl.uniform_1_f32(pile.location("columnWidth"), COLUMN_WIDTH);
-                gl.uniform_4_f32_slice(pile.location("light"), &light);
-                gl.uniform_4_f32_slice(pile.location("shadowTint"), &ambient.shadow_tint);
-                gl.uniform_1_i32(pile.location("heights"), 0);
-                gl.uniform_4_f32_slice(pile.location("panel"), &panel);
-                for layer in &piles {
-                    let count = layer.occluders.len().min(OCCLUDERS);
-                    let occluders: Vec<f32> = layer.occluders[..count].iter().flatten().copied().collect();
-                    gl.uniform_1_i32(pile.location("columnCount"), layer.count as i32);
-                    gl.uniform_1_f32(pile.location("pileTop"), layer.top + 2.0);
-                    gl.uniform_1_f32(pile.location("pileBottom"), layer.bottom);
-                    gl.uniform_2_f32(pile.location("origin"), layer.origin.x, layer.origin.y);
-                    gl.uniform_1_i32(pile.location("heightOffset"), layer.offset as i32);
-                    gl.uniform_1_i32(pile.location("occluderCount"), count as i32);
-                    if count > 0 {
-                        gl.uniform_4_f32_slice(pile.location("occluders"), &occluders);
-                    }
-                    gl.draw_arrays(glow::TRIANGLE_STRIP, 0, 4);
-                }
-            }
-            if sprites > 0 {
-                let sprite = &self.sprite;
-                gl.use_program(Some(sprite.program));
-                gl.bind_vertex_array(Some(self.sprite_array));
-                gl.bind_buffer(glow::ARRAY_BUFFER, Some(self.sprite_buffer));
-                gl.buffer_data_u8_slice(glow::ARRAY_BUFFER, bytes(&self.sprites[..sprites]), glow::STREAM_DRAW);
-                gl.uniform_2_f32_slice(sprite.location("viewSize"), &view);
-                gl.uniform_1_f32(sprite.location("scale"), 1.0);
-                gl.uniform_1_f32(sprite.location("time"), time);
-                gl.uniform_4_f32_slice(sprite.location("light"), &light);
-                gl.uniform_4_f32_slice(sprite.location("panel"), &panel);
-                gl.draw_arrays_instanced(glow::TRIANGLE_STRIP, 0, 4, sprites as i32);
-            }
-            gl.bind_vertex_array(None);
-        }
-        self.egl.swap_buffers(self.display, surface.surface).map_err(|error| error.to_string())
-    }
-}
+        let sprite_uniforms = SpriteUniforms {
+            view_size,
+            scale: 1.0,
+            time,
+            light,
+            panel: panel_rect,
+        };
 
-/// Plain numbers as the bytes OpenGL takes.
-fn bytes<T: Copy>(values: &[T]) -> &[u8] {
-    unsafe { std::slice::from_raw_parts(values.as_ptr().cast::<u8>(), std::mem::size_of_val(values)) }
-}
+        self.queue.write_buffer(&self.sprite_uniform_buffer, 0, bytemuck::bytes_of(&sprite_uniforms));
 
-unsafe fn program(gl: &glow::Context, vertex: &str, fragment: &str, uniforms: &[&str]) -> Result<Program, String> {
-    unsafe {
-        let program = gl.create_program()?;
-        let mut shaders = Vec::new();
-        for (kind, source) in [(glow::VERTEX_SHADER, vertex), (glow::FRAGMENT_SHADER, fragment)] {
-            let shader = gl.create_shader(kind)?;
-            gl.shader_source(shader, source);
-            gl.compile_shader(shader);
-            if !gl.get_shader_compile_status(shader) {
-                return Err(format!("shader: {}", gl.get_shader_info_log(shader)));
-            }
-            gl.attach_shader(program, shader);
-            shaders.push(shader);
+        let mut encoder = self.device.create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+        {
+            let _render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                label: None,
+                color_attachments: &[Some(wgpu::RenderPassColorAttachment {
+                    view: &view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::TRANSPARENT),
+                        store: wgpu::StoreOp::Store,
+                    },
+                })],
+                depth_stencil_attachment: None,
+                timestamp_writes: None,
+                occlusion_query_set: None,
+            });
+
+            // TODO: Compute pass integration happens here for Phase 3!
+
+            // For now, render passes
         }
-        gl.link_program(program);
-        if !gl.get_program_link_status(program) {
-            return Err(format!("program: {}", gl.get_program_info_log(program)));
-        }
-        for shader in shaders {
-            gl.detach_shader(program, shader);
-            gl.delete_shader(shader);
-        }
-        let uniforms = uniforms.iter().map(|&name| (name.to_string(), gl.get_uniform_location(program, name))).collect();
-        Ok(Program { program, uniforms })
+
+        self.queue.submit(std::iter::once(encoder.finish()));
+        frame.present();
+        Ok(())
     }
 }

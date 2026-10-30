@@ -13,6 +13,14 @@ conflicts=('snowhush')
 source=("snowhush-linux-x86_64-$pkgver.tar.gz::https://github.com/mbezruchko/Snowhush/releases/download/v$pkgver/snowhush-linux-x86_64.tar.gz")
 sha256sums=('6abb11efaf44610c1342286762bb39ceb3812d17fd15e9ce222e9ba5f1bf9d33')
 
+build() {
+  cd "$srcdir/linux"
+  # Let CachyOS pass its optimized system RUSTFLAGS natively
+  CARGO_PROFILE_RELEASE_CODEGEN_UNITS=1 \
+  CARGO_PROFILE_RELEASE_LTO=fat \
+  cargo build --frozen --release --target-dir target
+}
+
 package() {
     cp -a "$srcdir/usr" "$pkgdir/"
 }
