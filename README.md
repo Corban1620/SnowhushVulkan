@@ -1,3 +1,7 @@
+### A full rewrite of SnowHush's OPENGL to Vulkan.
+#### Status: Still in development.
+
+
 <p align="center">
   <img src="site/assets/icon-512.png" width="128" height="128" alt="Snowhush icon">
 </p>
