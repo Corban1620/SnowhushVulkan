@@ -184,7 +184,7 @@ pub fn run() -> Result<(), String> {
         tray.shutdown().wait();
     }
     for screen in app.screens.drain(..) {
-        screen.release(&app.gpu);
+        screen.release(&mut app.gpu);
     }
     Ok(())
 }
@@ -469,7 +469,7 @@ impl App {
         }
         for screen in current {
             log!("display {} gone", screen.name);
-            screen.release(&self.gpu);
+            screen.release(&mut self.gpu);
         }
         self.place_screens();
     }
@@ -593,7 +593,7 @@ impl LayerShellHandler for App {
         if let Some(index) = self.screens.iter().position(|screen| screen.is(layer)) {
             let screen = self.screens.swap_remove(index);
             log!("{}: overlay closed", screen.name);
-            screen.release(&self.gpu);
+            screen.release(&mut self.gpu);
             self.displays_changed_at = Some(Instant::now());
         }
     }
@@ -601,7 +601,7 @@ impl LayerShellHandler for App {
     fn configure(&mut self, _: &Connection, _: &QueueHandle<Self>, layer: &LayerSurface, configure: LayerSurfaceConfigure, _: u32) {
         if let Some(screen) = self.screens.iter_mut().find(|screen| screen.is(layer)) {
             let (width, height) = configure.new_size;
-            screen.configure(&self.gpu, width, height);
+            screen.configure(&mut self.gpu, width, height);
         }
     }
 }

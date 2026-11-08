@@ -1,25 +1,17 @@
-#version 300 es
+#version 450
+#include "globals.glsl"
+layout(set = 1, binding = 0) uniform sampler2D picture;
 // signFragment from the Mac app's shaders.
-precision highp float;
-precision highp int;
-precision highp sampler2D;
 
-uniform float time;
 // The drift's surface: nothing of the sign shows below it.
-uniform float ground;
-uniform vec4 light;
 // The cursor's candle: where it is, how far it reaches and how bright it is.
-uniform vec4 lantern;
 // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
-uniform vec4 pumpkins[3];
 // The panel's rectangle, left, bottom, right, top: the sign goes behind it.
-uniform vec4 panel;
-uniform sampler2D picture;
 
-in vec2 vUv;
-in vec2 vWorld;
+layout(location = 0) in vec2 vUv;
+layout(location = 1) in vec2 vWorld;
 
-out vec4 fragment;
+layout(location = 0) out vec4 fragment;
 
 const vec3 candle = vec3(1.0, 0.62, 0.26);
 
@@ -40,13 +32,20 @@ float candlelight(vec2 point) {
     return min(glow, 1.0);
 }
 
+layout(push_constant, std140) uniform Push {
+    vec2 anchor;
+    vec2 size;
+    float angle;
+    float ground;
+} pc;
+
 void main() {
     if (vWorld.x >= panel.x && vWorld.x < panel.z && vWorld.y >= panel.y && vWorld.y < panel.w) discard;
     vec4 color = texture(picture, vUv);
     // It comes up out of the snow: nothing shows below the drift's surface.
-    color *= smoothstep(ground - 1.0, ground + 1.0, vWorld.y);
+    color *= smoothstep(pc.ground - 1.0, pc.ground + 1.0, vWorld.y);
     // The moonlight only half dims it, so it stays orange.
-    color.rgb *= mix(vec3(1.0), light.rgb, 0.5);
+    color.rgb *= mix(vec3(1.0), g.lightInfo.rgb, 0.5);
     color.rgb = mix(color.rgb, candle * color.a, candlelight(vWorld) * 0.3);
     fragment = color;
 }

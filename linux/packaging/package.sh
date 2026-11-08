@@ -42,7 +42,7 @@ Package: snowhush
 Version: $version
 Architecture: amd64
 Maintainer: Mykhailo Bezruchko <michael.bezruchko@gmail.com>
-Depends: libc6 (>= 2.35), libgcc-s1, libwayland-client0, libwayland-egl1, libegl1
+Depends: libc6 (>= 2.35), libgcc-s1, libwayland-client0, libvulkan1
 Section: x11
 Priority: optional
 Homepage: https://snowhush.pages.dev

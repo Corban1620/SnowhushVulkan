@@ -1,17 +1,10 @@
-#version 300 es
+#version 450
+#include "globals.glsl"
 // spriteVertex from windows/src/shaders.hlsl.
-precision highp float;
-precision highp int;
 
-uniform vec2 viewSize;
-uniform float scale;
-uniform float time;
 // The cursor's candle: where it is, how far it reaches and how bright it is.
-uniform vec4 lantern;
 // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
-uniform vec4 pumpkins[3];
 // How far everything is jolted, in points.
-uniform vec2 shake;
 
 layout(location = 0) in vec2 position;
 layout(location = 1) in vec2 velocity;
@@ -36,27 +29,27 @@ layout(location = 13) in vec2 rain;
 // far it is squashed or stretched.
 layout(location = 14) in vec4 drop;
 
-out vec2 vCoord;
-out float vAlpha;
-out float vSoft;
-out vec4 vTint;
-out vec2 vStreak;
-out float vRadius;
-out float vLump;
-out float vSpin;
-out float vWarm;
+layout(location = 0) out vec2 vCoord;
+layout(location = 1) out float vAlpha;
+layout(location = 2) out float vSoft;
+layout(location = 3) out vec4 vTint;
+layout(location = 4) out vec2 vStreak;
+layout(location = 5) out float vRadius;
+layout(location = 6) out float vLump;
+layout(location = 7) out float vSpin;
+layout(location = 8) out float vWarm;
 // The ghost's seed, the drift's surface in sizes above its middle, its eyes and its form.
-flat out vec4 vGhost;
-flat out vec4 vPose;
+layout(location = 9) flat out vec4 vGhost;
+layout(location = 10) flat out vec4 vPose;
 // Its dab, its anger and its size in points.
-flat out vec4 vMood;
+layout(location = 11) flat out vec4 vMood;
 // A leaf's seed, which way it points, how much of its face shows, and how far its sprite reaches past it.
-flat out vec4 vLeaf;
+layout(location = 12) flat out vec4 vLeaf;
 // How far it turns and tumbles over the exposure, and how many moments of it are drawn.
-flat out vec4 vSmear;
+layout(location = 13) flat out vec4 vSmear;
 // Rain's kind and how far along a hanging drop is, then the sprite's size and its quad's, in pixels.
-flat out vec4 vRain;
-flat out vec4 vDrop;
+layout(location = 14) flat out vec4 vRain;
+layout(location = 15) flat out vec4 vDrop;
 
 float flicker(float t, float seed) {
     return 0.86 + 0.08 * sin(t * 11.0 + seed * 2.1) + 0.06 * sin(t * 29.0 + 1.3 + seed * 4.3);
@@ -97,7 +90,7 @@ vec2 hangingReach(float along) {
 }
 
 void main() {
-    vec2 corner = vec2(float(gl_VertexID & 1), float(gl_VertexID >> 1));
+    vec2 corner = vec2(float(gl_VertexIndex & 1), float(gl_VertexIndex >> 1));
     vCoord = vec2(corner.x, 1.0 - corner.y);
     vWarm = candlelight(position);
     vRain = vec4(0.0);

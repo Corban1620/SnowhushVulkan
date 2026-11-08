@@ -1,52 +1,45 @@
-#version 300 es
+#version 450
+#include "globals.glsl"
 // pileFragment from windows/src/shaders.hlsl. The heights come in a texture 4096 wide instead of a buffer.
-precision highp float;
-precision highp int;
-precision highp sampler2D;
 
-uniform float scale;
-uniform float time;
-uniform float columnWidth;
-uniform int columnCount;
-uniform int occluderCount;
-uniform vec2 origin;
-uniform int heightOffset;
-uniform vec4 light;
-uniform vec4 shadowTint;
 // The colour the snow's surface glows, and how much.
-uniform vec4 rim;
 // The cursor's candle: where it is, how far it reaches and how bright it is.
-uniform vec4 lantern;
 // The pumpkins' candles: where each burns, how far its light reaches and how bright it is.
-uniform vec4 pumpkins[3];
-uniform vec4 occluders[16];
-uniform sampler2D heights;
 // The panel's rectangle, left, bottom, right, top: the snow lying behind it doesn't show.
-uniform vec4 panel;
 // One while leaves fall instead of snow.
-uniform float autumn;
 // One while the leaves are cherry blossom petals.
-uniform float blossom;
 // One while fallen leaves wither away.
-uniform float wilt;
 // How far along its window the heap has drifted since it came, as the window's left edge was dragged under it.
-uniform float drift;
 
-in vec2 vLocal;
+layout(location = 0) in vec2 vLocal;
 
-out vec4 fragment;
+layout(location = 0) out vec4 fragment;
+
+layout(std430, set = 1, binding = 0) readonly buffer Heights { float heights[]; };
+layout(std430, set = 1, binding = 1) readonly buffer Occluders { vec4 values[]; };
+
+layout(push_constant, std140) uniform Push {
+    vec2 origin;
+    float pileTop;
+    float pileBottom;
+    int columnCount;
+    int heightOffset;
+    int occluderCount;
+    int occluderBase;
+    float drift;
+} pc;
 
 const vec3 candle = vec3(1.0, 0.62, 0.26);
 
 float fetch(int i) {
-    return texelFetch(heights, ivec2(i % 4096, i / 4096), 0).r;
+    return heights[i];
 }
 
 float heightAt(int start, float x) {
     float f = x / columnWidth - 0.5;
     float base = floor(f);
-    int i = clamp(int(base), 0, columnCount - 1);
-    int j = min(i + 1, columnCount - 1);
+    int i = clamp(int(base), 0, pc.columnCount - 1);
+    int j = min(i + 1, pc.columnCount - 1);
     return mix(fetch(start + i), fetch(start + j), clamp(f - base, 0.0, 1.0));
 }
 
@@ -141,19 +134,19 @@ float candlelight(vec2 point) {
 }
 
 void main() {
-    vec2 world = vLocal + origin;
+    vec2 world = vLocal + pc.origin;
     if (world.x >= panel.x && world.x < panel.z && world.y >= panel.y && world.y < panel.w) discard;
     for (int k = 0; k < 16; k++) {
-        if (k >= occluderCount) break;
-        vec4 o = occluders[k];
+        if (k >= pc.occluderCount) break;
+        vec4 o = values[pc.occluderBase + k];
         if (world.x >= o.x && world.x < o.z && world.y >= o.y && world.y < o.w) discard;
     }
 
     float x = vLocal.x;
     // Where along the heap itself: it stays put as the window's left edge is dragged under it.
-    vec2 grain = vec2(x - drift, vLocal.y);
-    float level = heightAt(heightOffset, x);
-    float bed = heightAt(heightOffset + columnCount, x);
+    vec2 grain = vec2(x - pc.drift, vLocal.y);
+    float level = heightAt(pc.heightOffset, x);
+    float bed = heightAt(pc.heightOffset + pc.columnCount, x);
     // The leaves on top are drawn one by one, the heap under them as a mass with a ragged top; a leaf or two lie on their own.
     if (autumn > 0.5) {
         level -= 2.5;
@@ -165,7 +158,7 @@ void main() {
         * clamp((level - bed) / 0.75, 0.0, 1.0);
     if (coverage <= 0.0) discard;
 
-    float slope = (heightAt(heightOffset, x + 2.0) - heightAt(heightOffset, x - 2.0)) * 0.25;
+    float slope = (heightAt(pc.heightOffset, x + 2.0) - heightAt(pc.heightOffset, x - 2.0)) * 0.25;
     float lit = dot(normalize(vec2(-slope, 1.0)), normalize(vec2(-0.5, 1.0)));
 
     vec3 color;
@@ -191,8 +184,8 @@ void main() {
     }
 
     // Night dims fallen leaves without draining their colour.
-    color *= autumn > 0.5 ? mix(vec3(1.0), light.rgb, 0.4) : light.rgb;
-    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - autumn));
+    color *= autumn > 0.5 ? mix(vec3(1.0), g.lightInfo.rgb, 0.4) : g.lightInfo.rgb;
+    color = mix(color, g.rimInfo.rgb, g.rimInfo.a * exp(-depth / 2.5) * (1.0 - autumn));
     color = mix(color, candle, candlelight(world) * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
     fragment = vec4(color * coverage, coverage);
 }

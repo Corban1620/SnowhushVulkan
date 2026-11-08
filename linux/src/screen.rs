@@ -151,7 +151,7 @@ impl Screen {
     }
 
     /// The compositor settled the surface's size; the snow takes the space it was given.
-    pub fn configure(&mut self, gpu: &Gpu, width: u32, height: u32) {
+    pub fn configure(&mut self, gpu: &mut Gpu, width: u32, height: u32) {
         let (width, height) = (width.max(1), height.max(1));
         match &mut self.surface {
             Some(surface) => gpu.resize(surface, width as i32, height as i32),
@@ -339,15 +339,15 @@ impl Screen {
         time: f32,
         pumpkins: bool,
     ) -> Result<bool, String> {
-        let Some(surface) = &self.surface else { return Ok(false) };
-        let wl_surface = self.layer.wl_surface();
-        wl_surface.frame(qh, FrameCallbackData(wl_surface.clone()));
-        self.shown_pending = Some(now);
         let panel = self.shelf.map(|shelf| {
             // Below the rounded corners only, so snow curling round them stays in front.
             let r = windows::local_rect(&shelf.rect, &self.area());
             [r.min_x(), r.min_y(), r.max_x(), r.max_y() - shelf.radius]
         });
+        let Some(surface) = &mut self.surface else { return Ok(false) };
+        let wl_surface = self.layer.wl_surface();
+        wl_surface.frame(qh, FrameCallbackData(wl_surface.clone()));
+        self.shown_pending = Some(now);
         gpu.draw(surface, &self.simulation, Ambient { shadow_tint: self.shadow_tint, lantern, ..ambient }, panel, time, self.opacity)?;
         self.pumpkins_shown = pumpkins;
         Ok(true)
@@ -448,7 +448,7 @@ impl Screen {
     }
 
     /// Takes the fade a step toward shown, or gone under a full-screen app; true while it lasts.
-    fn fade(&mut self, gpu: &Gpu, dt: f32, at_once: bool) -> bool {
+    fn fade(&mut self, gpu: &mut Gpu, dt: f32, at_once: bool) -> bool {
         let target = if self.covered { 0.0 } else { 1.0 };
         if self.opacity == target {
             return false;
@@ -456,7 +456,7 @@ impl Screen {
         let step = if at_once { 1.0 } else { dt / if self.covered { FADE_OUT } else { FADE_IN } };
         self.opacity = if target > self.opacity { (self.opacity + step).min(1.0) } else { (self.opacity - step).max(0.0) };
         if self.hidden()
-            && let Some(surface) = &self.surface
+            && let Some(surface) = &mut self.surface
         {
             let _ = gpu.clear(surface);
         }
@@ -492,7 +492,7 @@ impl Screen {
         V2::new(x - area.x as f32, (area.bottom() as f32) - y)
     }
 
-    pub fn release(mut self, gpu: &Gpu) {
+    pub fn release(mut self, gpu: &mut Gpu) {
         if let Some(surface) = self.surface.take() {
             gpu.release(surface);
         }

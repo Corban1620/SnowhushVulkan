@@ -9,7 +9,8 @@ License:        PolyForm-Noncommercial-1.0.0
 URL:            https://github.com/mbezruchko/Snowhush
 ExclusiveArch:  x86_64
 # Loaded while running, so the automatic requirements miss it.
-Requires:       libEGL.so.1()(64bit)
+Requires:       libvulkan.so.1()(64bit)
+Requires:       libwayland-client.so.0()(64bit)
 
 %description
 Soft snow drifts across your desktop, settles on the tops of your windows and

@@ -11,11 +11,8 @@ path = "src/main.rs"
 [dependencies]
 snowhush-core = { path = "../core" }
 smithay-client-toolkit = { version = "0.21", default-features = false, features = ["calloop"] }
-wayland-client = "0.31"
-wayland-egl = "0.32"
-khronos-egl = { version = "6", features = ["dynamic"] }
-libloading = "0.8"
-glow = "0.18"
+wayland-client = { version = "0.31", features = ["system"] }
+ash = "0.38"
 calloop = { version = "0.14", features = ["signals"] }
 calloop-wayland-source = "0.4"
 ksni = { version = "0.3", default-features = false, features = ["blocking", "async-io"] }

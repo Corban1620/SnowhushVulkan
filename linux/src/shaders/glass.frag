@@ -1,13 +1,10 @@
-#version 300 es
+#version 450
+#include "globals.glsl"
+layout(set = 1, binding = 0) uniform sampler2D field;
 // glassFragment from windows/src/shaders.hlsl.
-precision highp float;
-precision highp int;
 
-uniform highp sampler2D field;
-uniform vec4 light;
-uniform float scale;
 
-out vec4 fragment;
+layout(location = 0) out vec4 fragment;
 
 // The drops on the glass and their beads, drawn from the field they make together as Liquid Glass is drawn: all but
 // clear inside, lit along the rim on the side the light comes from and faintly on the other, a glint near the top, a
@@ -21,15 +18,15 @@ void main() {
     // Gradients are taken before any branch.
     float edge = max(fwidth(f), 0.002);
     // The surface's rows run up the screen: what is above a pixel is a row further on.
-    float above = texelFetch(field, clamp(c + ivec2(0, max(1, int(2.0 * scale + 0.5))), ivec2(0), last), 0).r;
+    float above = texelFetch(field, clamp(c - ivec2(0, max(1, int(2.0 * scale + 0.5))), ivec2(0), last), 0).r;
     if (max(f, above) < threshold * 0.55) discard;
 
     float left = texelFetch(field, clamp(c - ivec2(1, 0), ivec2(0), last), 0).g;
     float right = texelFetch(field, clamp(c + ivec2(1, 0), ivec2(0), last), 0).g;
-    float up = texelFetch(field, clamp(c + ivec2(0, 1), ivec2(0), last), 0).g;
-    float down = texelFetch(field, clamp(c - ivec2(0, 1), ivec2(0), last), 0).g;
+    float aboveEdge = texelFetch(field, clamp(c - ivec2(0, 1), ivec2(0), last), 0).g;
+    float belowEdge = texelFetch(field, clamp(c + ivec2(0, 1), ivec2(0), last), 0).g;
     // Screen space, y down: the slope points away from the drop's crest, toward its rim.
-    vec2 slope = -vec2(right - left, down - up) * 0.5 * scale * 1.1;
+    vec2 slope = -vec2(right - left, belowEdge - aboveEdge) * 0.5 * scale * 1.1;
     vec3 n = normalize(vec3(slope, 1.0));
     vec2 toward = normalize(vec2(-0.55, -0.83));
     float tilt = clamp(length(n.xy) / 0.72, 0.0, 1.0);
@@ -47,5 +44,5 @@ void main() {
 
     float glow = (rimLight + specular + crescent + 0.01) * mask;
     float alpha = shade * mask + shadow;
-    fragment = vec4(vec3(0.95, 0.975, 1.0) * light.rgb * min(glow, 1.0), alpha);
+    fragment = vec4(vec3(0.95, 0.975, 1.0) * g.lightInfo.rgb * min(glow, 1.0), alpha);
 }

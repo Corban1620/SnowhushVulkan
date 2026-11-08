@@ -1,21 +1,18 @@
-#version 300 es
+#version 450
+#include "globals.glsl"
 // fieldFragment from windows/src/shaders.hlsl.
-precision highp float;
-precision highp int;
 
-uniform float scale;
 // The panel's rectangle, left, bottom, right, top: rain falling past it goes behind it.
-uniform vec4 panel;
 
-in vec2 vCoord;
-in float vAlpha;
-in float vSoft;
-in vec2 vStreak;
-in float vRadius;
-flat in vec4 vRain;
-flat in vec4 vDrop;
+layout(location = 0) in vec2 vCoord;
+layout(location = 1) in float vAlpha;
+layout(location = 2) in float vSoft;
+layout(location = 4) in vec2 vStreak;
+layout(location = 5) in float vRadius;
+layout(location = 14) flat in vec4 vRain;
+layout(location = 15) flat in vec4 vDrop;
 
-out vec4 fragment;
+layout(location = 0) out vec4 fragment;
 
 #include "drop.glsl"
 
@@ -24,7 +21,7 @@ out vec4 fragment;
 // field's first channel, and the bump times how big the drop is, how high the water stands, its second.
 void main() {
     if (vRain.x < 1.5 || vRain.x > 2.5) discard;
-    vec2 at = gl_FragCoord.xy;
+    vec2 at = vec2(gl_FragCoord.x, viewSize.y - gl_FragCoord.y);
     bool hidden = at.x >= panel.x && at.x < panel.z && at.y >= panel.y && at.y < panel.w;
     // A drop behind the panel doesn't show, but one on the panel itself runs down in front of it.
     if (hidden && vSoft < 0.5) discard;

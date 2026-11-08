@@ -1,42 +1,32 @@
-#version 300 es
+#version 450
+#include "globals.glsl"
 // spriteFragment from windows/src/shaders.hlsl.
-precision highp float;
-precision highp int;
 
-uniform float time;
-uniform vec4 light;
-uniform vec4 shadowTint;
 // The colour the snow's surface glows, and how much.
-uniform vec4 rim;
 // The panel's rectangle, left, bottom, right, top: snow falling past it goes behind it.
-uniform vec4 panel;
 // One while leaves fall instead of snow.
-uniform float autumn;
 // One while the leaves are cherry blossom petals.
-uniform float blossom;
 // One while fallen leaves wither away.
-uniform float wilt;
 // One while running drops and beads are drawn as glass, from their field; without it, they are drawn here.
-uniform float glass;
 
-in vec2 vCoord;
-in float vAlpha;
-in float vSoft;
-in vec4 vTint;
-in vec2 vStreak;
-in float vRadius;
-in float vLump;
-in float vSpin;
-in float vWarm;
-flat in vec4 vGhost;
-flat in vec4 vPose;
-flat in vec4 vMood;
-flat in vec4 vLeaf;
-flat in vec4 vSmear;
-flat in vec4 vRain;
-flat in vec4 vDrop;
+layout(location = 0) in vec2 vCoord;
+layout(location = 1) in float vAlpha;
+layout(location = 2) in float vSoft;
+layout(location = 3) in vec4 vTint;
+layout(location = 4) in vec2 vStreak;
+layout(location = 5) in float vRadius;
+layout(location = 6) in float vLump;
+layout(location = 7) in float vSpin;
+layout(location = 8) in float vWarm;
+layout(location = 9) flat in vec4 vGhost;
+layout(location = 10) flat in vec4 vPose;
+layout(location = 11) flat in vec4 vMood;
+layout(location = 12) flat in vec4 vLeaf;
+layout(location = 13) flat in vec4 vSmear;
+layout(location = 14) flat in vec4 vRain;
+layout(location = 15) flat in vec4 vDrop;
 
-out vec4 fragment;
+layout(location = 0) out vec4 fragment;
 
 const vec3 candle = vec3(1.0, 0.62, 0.26);
 
@@ -259,9 +249,9 @@ vec4 flowerAt(vec2 p, float seed, float spin, float face, float direction, float
 /// browns as it withers by `wither`; a whole flower's face points `direction` on the screen, and a petal curves the way
 /// it tumbles, `sense`.
 vec4 leafAt(vec2 p, float seed, float turn, float flip, float wither, float direction, float sense) {
-    if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, vAlpha, light.rgb, vWarm, wither);
+    if (blossom > 0.5 && fract(seed * 23.3) < 0.035) return flowerAt(p * 2.0, seed, turn, flip, direction, vAlpha, g.lightInfo.rgb, vWarm, wither);
     vec2 r = vec2(cos(turn) * p.x + sin(turn) * p.y, -sin(turn) * p.x + cos(turn) * p.y) * 2.0;
-    if (blossom > 0.5) return curledPetalAt(r, seed, turn, flip, sense, vAlpha, light.rgb, vWarm, wither);
+    if (blossom > 0.5) return curledPetalAt(r, seed, turn, flip, sense, vAlpha, g.lightInfo.rgb, vWarm, wither);
     float across = max(abs(flip), 0.35);
     r.y /= across;
     float inside;
@@ -287,7 +277,7 @@ vec4 leafAt(vec2 p, float seed, float turn, float flip, float wither, float dire
     color = mix(color, color * 0.6, vein * 0.55);
     if (flip < 0.0) color = mix(color, vec3(0.86, 0.74, 0.52), 0.28) * 0.9;
     // Night dims the leaves without draining their colour.
-    color *= (0.8 + 0.2 * abs(flip)) * mix(vec3(1.0), light.rgb, 0.4);
+    color *= (0.8 + 0.2 * abs(flip)) * mix(vec3(1.0), g.lightInfo.rgb, 0.4);
     color = mix(color, candle, vWarm * 0.45);
     return vec4(color * a, a);
 }
@@ -374,8 +364,8 @@ vec4 ghost(vec2 p, bool hidden) {
         float twinkle = pow(clamp(sin(time * (0.6 + glint * 1.8) + glint * 90.0), 0.0, 1.0), 28.0);
         color = mix(color, vec3(1.0), twinkle * exp(-depth / 7.0));
     }
-    color *= autumn > 0.5 ? mix(vec3(1.0), light.rgb, 0.4) : light.rgb;
-    color = mix(color, rim.rgb, rim.a * exp(-depth / 2.5) * (1.0 - autumn));
+    color *= autumn > 0.5 ? mix(vec3(1.0), g.lightInfo.rgb, 0.4) : g.lightInfo.rgb;
+    color = mix(color, g.rimInfo.rgb, g.rimInfo.a * exp(-depth / 2.5) * (1.0 - autumn));
     color = mix(color, candle, vWarm * (0.35 + 0.65 * exp(-depth / 14.0)) * 0.55);
 
     // Two dark hollows for eyes, blinking now and then; a cross one glares under brows slanting down inward.
@@ -433,7 +423,7 @@ vec2 hangingReach(float along) {
 // The lens shading of a drop: dark toward its rim, a bright crescent along its foot, a glint near its top.
 vec4 lensColor(float darkA, float lightA, float inside, float alpha) {
     vec3 dark = vec3(0.03, 0.04, 0.06);
-    vec3 bright = vec3(0.93, 0.96, 1.0) * light.rgb;
+    vec3 bright = vec3(0.93, 0.96, 1.0) * g.lightInfo.rgb;
     float a = (darkA + lightA - darkA * lightA) * inside * alpha;
     return vec4((dark * darkA * (1.0 - lightA) + bright * lightA) * inside * alpha, a);
 }
@@ -517,7 +507,7 @@ vec4 rainAt(vec2 p) {
     if (vRain.x > 4.5) return filmAt(p);
     if (vRain.x > 2.5 && vRain.x < 3.5) return hangingAt(p);
     // A running drop or a bead is drawn with the glass, from the field.
-    if (vRain.x > 1.5 && vRain.x < 2.5 && glass > 0.5) return vec4(0.0);
+    if (vRain.x > 1.5 && vRain.x < 2.5 && g.modeInfo.w > 0.5) return vec4(0.0);
     vec2 halfStreak = vStreak * 0.5;
     float span = dot(halfStreak, halfStreak);
     if (vRain.x < 1.5) {
@@ -532,7 +522,7 @@ vec4 rainAt(vec2 p) {
         float core = (1.0 - smoothstep(0.0, 0.7, r)) * strength;
         float a = sheath + core - sheath * core;
         if (a < 0.002) return vec4(0.0);
-        return vec4(vec3(0.22, 0.26, 0.32) * sheath * (1.0 - core) + vec3(0.86, 0.9, 0.97) * light.rgb * core, a);
+        return vec4(vec3(0.22, 0.26, 0.32) * sheath * (1.0 - core) + vec3(0.86, 0.9, 0.97) * g.lightInfo.rgb * core, a);
     }
     // The drop at every moment of the exposure, from where it is back to where it was, each with its tail, close
     // enough together that its glint draws a line rather than a row of dots.
@@ -550,7 +540,7 @@ vec4 rainAt(vec2 p) {
 
 void main() {
     // The viewport is the simulation's size, one pixel to a unit, so the fragment's place is its position.
-    vec2 at = gl_FragCoord.xy;
+    vec2 at = vec2(gl_FragCoord.x, viewSize.y - gl_FragCoord.y);
     bool hidden = at.x >= panel.x && at.x < panel.z && at.y >= panel.y && at.y < panel.w;
     // Quad coordinates run down the screen; velocities run up.
     vec2 p = vec2(vCoord.x - 0.5, 0.5 - vCoord.y);
@@ -601,7 +591,7 @@ void main() {
     vec3 core = vec3(0.965, 0.975, 0.995);
     vec3 edge = vec3(0.62, 0.67, 0.77);
     vec3 color = mix(core, edge, clamp(smoothstep(0.35, 1.0, r) * 0.65 + shading, 0.0, 1.0));
-    color = mix(color, vTint.rgb, vTint.a) * light.rgb;
+    color = mix(color, vTint.rgb, vTint.a) * g.lightInfo.rgb;
     color = mix(color, candle, vWarm * 0.7);
     a = min(1.0, a * (1.0 + vWarm * 0.8));
     fragment = vec4(color * a, a);
