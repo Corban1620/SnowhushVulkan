@@ -49,7 +49,7 @@ Homepage: https://snowhush.pages.dev
 Description: Snow on your Wayland desktop
  Soft snow drifts across your desktop, settles on the tops of your windows,
  slides off when you drag them and parts around the cursor. Needs KDE Plasma 6,
- Sway or niri on Wayland.
+ Hyprland, Sway or niri on Wayland.
 EOF
 dpkg-deb --root-owner-group -Zxz --build "$deb" "$out/snowhush-x86_64.deb" > /dev/null
 

@@ -1,7 +1,28 @@
 use crate::geometry::V2;
 
+/// How steep a bed snow still clings to, as a rise over run: about 55 degrees.
+const CLING_SLOPE: f32 = 1.4;
+
 /// A height field of snow columns lying on a bed: the screen bottom, or the top edge of a window
 /// whose rounded corners curve the bed down at both ends.
+/// A droplet of rain's spray on a window's glass: from the left end of its top edge, and how big it is.
+#[derive(Clone, Copy)]
+pub struct Droplet {
+    pub offset: V2,
+    pub radius: f32,
+}
+
+/// A piece of the film of water a running drop leaves on a window's glass: from where to where, from the left end of
+/// its top edge, how wide, how old and how long it takes to dry.
+#[derive(Clone, Copy)]
+pub struct FilmPiece {
+    pub from: V2,
+    pub to: V2,
+    pub width: f32,
+    pub age: f32,
+    pub life: f32,
+}
+
 pub struct SnowLayer {
     pub column_width: f32,
     pub opens_at_edges: bool,
@@ -15,9 +36,21 @@ pub struct SnowLayer {
     pub top: f32,
     pub bed_depth: f32,
     pub occluders: Vec<[f32; 4]>,
+    /// How far the window it lies on reaches down from its top edge: as far as a drop can run down it.
+    pub face: f32,
+    /// Windows in front of any part of the window it lies on, which hide a drop running down it.
+    pub face_occluders: Vec<[f32; 4]>,
+    /// Rain's spray on the window's glass, and the film running drops leave on it.
+    pub spray: Vec<Droplet>,
+    pub film: Vec<FilmPiece>,
     pub moved_at: f64,
+    /// When the snow came back onto its window from elsewhere, to grow back into shape rather than appear at once.
+    pub returned_at: f64,
     pub spill_left: f32,
     pub spill_right: f32,
+    /// How high the snow lying just past each end, left then right, comes up that end: it holds up the snow on the
+    /// ledge, which spills off only above it.
+    pub outside: [f32; 2],
     /// Smoothed path of the supporting edge; the snow reacts to its accelerations, not to raw jittery samples.
     pub track: V2,
     pub track_velocity: V2,
@@ -26,6 +59,16 @@ pub struct SnowLayer {
     pub offset_velocity: V2,
     pub previous_base_y: f32,
     pub agitation: f32,
+    /// How far the snow has moved along the window since it came, as the window's left edge was dragged in or out
+    /// under it: what is drawn in it moves along too.
+    pub drift: f32,
+    /// The window's right edge, where the snow ends short of a whole column: which edge moved tells a resize from a
+    /// move.
+    pub right: f32,
+    /// How many leaves lie on this heap, as of the last step.
+    pub lying_leaves: f32,
+    /// How fast the heap was going as it came off its window at this step, for the leaves lying on it to go along.
+    pub thrown: Option<V2>,
     pub swing_direction: V2,
     pub swing_peak: f32,
     pub previous_swing_peak: f32,
@@ -52,15 +95,25 @@ impl SnowLayer {
             top: 0.0,
             bed_depth: 0.0,
             occluders: Vec::new(),
+            face: 200.0,
+            face_occluders: Vec::new(),
+            spray: Vec::new(),
+            film: Vec::new(),
             moved_at: -1.0,
+            returned_at: -10.0,
             spill_left: 0.0,
             spill_right: 0.0,
+            outside: [0.0; 2],
             track: origin,
             track_velocity: V2::ZERO,
             offset: V2::ZERO,
             offset_velocity: V2::ZERO,
             previous_base_y: origin.y,
             agitation: 0.0,
+            drift: 0.0,
+            right: 0.0,
+            lying_leaves: 0.0,
+            thrown: None,
             swing_direction: V2::ZERO,
             swing_peak: 0.0,
             previous_swing_peak: 0.0,
@@ -86,6 +139,12 @@ impl SnowLayer {
 
     pub fn base(&self) -> V2 {
         self.origin + self.offset
+    }
+
+    /// Where the snow's own positions along it start: what lies in it keeps its place there as it slides or the
+    /// window's left edge moves under it.
+    pub fn heap_x(&self) -> f32 {
+        self.base().x + self.drift
     }
 
     pub fn index(&self, x: f32) -> Option<usize> {
@@ -179,6 +238,14 @@ impl SnowLayer {
         }
     }
 
+    /// Moves the layer and what it remembers of its window's path up by `by`, as the screen's coordinates shift under
+    /// it, so it takes this for no motion of its window.
+    pub fn raise(&mut self, by: f32) {
+        self.origin.y += by;
+        self.track.y += by;
+        self.previous_base_y += by;
+    }
+
     pub fn refresh_top(&mut self) {
         self.top = self.heights.iter().copied().fold(0.0, f32::max);
     }
@@ -270,12 +337,16 @@ impl SnowLayer {
             return false;
         }
         let limit = repose * self.column_width;
+        // Snow clings to its bed: a layer may follow the bed down a rounded corner as far as it is no steeper than
+        // `CLING_SLOPE`, on top of the angle of repose its own surface keeps.
+        let steepest = CLING_SLOPE * self.column_width;
         let forward_first = self.parity;
         self.parity = !self.parity;
         let mut moved = false;
         let mut spilled_left = 0.0;
         let mut spilled_right = 0.0;
         let open = self.opens_at_edges;
+        let [outside_left, outside_right] = self.outside;
         let h = &mut self.heights;
         let p = &mut self.packed;
         let b = &self.bed;
@@ -289,14 +360,17 @@ impl SnowLayer {
                     continue;
                 }
                 let difference = (b[i] + h[i]) - (b[i + 1] + h[i + 1]);
-                if difference > limit + 0.01 {
-                    let transfer = ((difference - limit) * 0.5).min(h[i]);
+                let fall = b[i] - b[i + 1];
+                let ahead = limit + fall.clamp(0.0, steepest);
+                let behind = limit + (-fall).clamp(0.0, steepest);
+                if difference > ahead + 0.01 {
+                    let transfer = ((difference - ahead) * 0.5).min(h[i]);
                     shift(h, p, transfer, i, i + 1);
                     if transfer > 0.0 {
                         moved = true;
                     }
-                } else if difference < -limit - 0.01 {
-                    let transfer = ((-difference - limit) * 0.5).min(h[i + 1]);
+                } else if difference < -behind - 0.01 {
+                    let transfer = ((-difference - behind) * 0.5).min(h[i + 1]);
                     shift(h, p, transfer, i + 1, i);
                     if transfer > 0.0 {
                         moved = true;
@@ -304,15 +378,15 @@ impl SnowLayer {
                 }
             }
             if open {
-                if !held[0] && h[0] > limit + 0.01 {
-                    let transfer = (h[0] - limit) * 0.5;
+                if !held[0] && h[0] - outside_left > limit + 0.01 {
+                    let transfer = (h[0] - outside_left - limit) * 0.5;
                     h[0] -= transfer;
                     p[0] = p[0].min(h[0]);
                     spilled_left += transfer;
                     moved = true;
                 }
-                if !held[count - 1] && h[count - 1] > limit + 0.01 {
-                    let transfer = (h[count - 1] - limit) * 0.5;
+                if !held[count - 1] && h[count - 1] - outside_right > limit + 0.01 {
+                    let transfer = (h[count - 1] - outside_right - limit) * 0.5;
                     h[count - 1] -= transfer;
                     p[count - 1] = p[count - 1].min(h[count - 1]);
                     spilled_right += transfer;

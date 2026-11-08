@@ -1,6 +1,6 @@
 //! Where the other windows are, which Wayland keeps from apps: each compositor tells it in its own way, and
-//! each way ends in the same report. KWin runs a script that calls the app; Sway and niri answer over their
-//! own sockets.
+//! each way ends in the same report. KWin runs a script that calls the app; Hyprland, Sway and niri answer
+//! over their own sockets.
 
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::sync::{Arc, Mutex};
@@ -9,7 +9,7 @@ use calloop::ping::Ping;
 use serde::Deserialize;
 use zbus::blocking::Connection as Bus;
 
-use crate::{kwin, log, niri, sway};
+use crate::{hyprland, kwin, log, niri, sway};
 
 /// A display, in logical pixels on the shared desktop: its bounds and its work area, the part panels leave
 /// free, whose bottom is the ground the snow settles on.
@@ -69,6 +69,24 @@ pub struct Report {
     /// The compositor shows something the snow mustn't be drawn over, such as niri's overview.
     #[serde(default)]
     pub hidden: bool,
+    /// The desktop and activity shown.
+    #[serde(default)]
+    pub desktop: String,
+    /// The desktop's column in KWin's grid of desktops, counted from 0, how many columns there are, and whether
+    /// switching on past the last desktop comes round to the first.
+    #[serde(default)]
+    pub column: i32,
+    #[serde(default)]
+    pub columns: i32,
+    #[serde(default)]
+    pub wraps: bool,
+    /// The desktops are sliding past: windows that came with the new one are listed where they will stop, not
+    /// where they are now.
+    #[serde(skip)]
+    pub switching: bool,
+    /// The latest switch that slid the desktops sideways.
+    #[serde(skip)]
+    pub slide: Option<kwin::Slide>,
 }
 
 /// What the compositor last told, read by the snow loop at each frame.
@@ -128,6 +146,7 @@ fn pack(x: f32, y: f32) -> u64 {
 /// The compositor the windows come from, picked by what the session says it runs. A compositor started
 /// inside another leaves its own variable to the apps in it, so the innermost is asked first.
 pub enum Source {
+    Hyprland,
     Niri,
     Sway,
     KWin,
@@ -135,7 +154,11 @@ pub enum Source {
 
 impl Source {
     pub fn start(bus: &Bus, shared: Arc<Shared>, show_in_screenshots: bool) -> Source {
-        let source = if std::env::var_os("NIRI_SOCKET").is_some() {
+        // Hyprland's instance is checked against the app's own Wayland socket, so it is right wherever it runs.
+        let hyprland = hyprland::instance();
+        let source = if hyprland.is_some() {
+            Source::Hyprland
+        } else if std::env::var_os("NIRI_SOCKET").is_some() {
             Source::Niri
         } else if std::env::var_os("SWAYSOCK").is_some() {
             Source::Sway
@@ -143,6 +166,7 @@ impl Source {
             Source::KWin
         };
         let started = match source {
+            Source::Hyprland => hyprland.ok_or_else(|| "no Hyprland instance".to_string()).and_then(|folder| hyprland::start(shared, folder)),
             Source::Niri => niri::start(shared),
             Source::Sway => sway::start(shared),
             Source::KWin => kwin::load_script(bus, show_in_screenshots),
@@ -156,6 +180,7 @@ impl Source {
 
     fn name(&self) -> &'static str {
         match self {
+            Source::Hyprland => "Hyprland",
             Source::Niri => "niri",
             Source::Sway => "Sway",
             Source::KWin => "KWin",

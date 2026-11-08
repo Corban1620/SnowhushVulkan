@@ -2,8 +2,10 @@
 
 mod app;
 mod desktop;
+mod halloween;
 mod light;
 mod log;
+mod menu;
 mod prefs;
 mod render;
 mod screen;

@@ -1,17 +1,17 @@
 # snowhush-bin on the AUR: the app as GitHub Actions built it for the release. update.sh sets the version and
 # the checksum after each release.
 pkgname=snowhush-bin
-pkgver=0.5.7
+pkgver=0.9.1
 pkgrel=1
-pkgdesc="Snow on your Wayland desktop, in KDE Plasma, Sway or niri: it settles on windows and parts around the cursor"
+pkgdesc="Snow on your Wayland desktop, in KDE Plasma, Hyprland, Sway or niri: it settles on windows and parts around the cursor"
 arch=('x86_64')
 url="https://snowhush.pages.dev"
-license=('MIT')
+license=('PolyForm-Noncommercial-1.0.0')
 depends=('libglvnd' 'wayland' 'gcc-libs' 'glibc')
 provides=('snowhush')
 conflicts=('snowhush')
 source=("snowhush-linux-x86_64-$pkgver.tar.gz::https://github.com/mbezruchko/Snowhush/releases/download/v$pkgver/snowhush-linux-x86_64.tar.gz")
-sha256sums=('6abb11efaf44610c1342286762bb39ceb3812d17fd15e9ce222e9ba5f1bf9d33')
+sha256sums=('c6418fae67e0c15b34f5298c0bf3cfcc38e563fc8e0e427d80e43dbbb44a03cc')
 
 package() {
     cp -a "$srcdir/usr" "$pkgdir/"

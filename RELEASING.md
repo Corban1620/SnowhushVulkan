@@ -19,7 +19,7 @@ One-time setup on the release machine:
 
 ## Linux
 
-`linux/` is the Linux app in Rust, on the same `core/`, for KDE Plasma 6, Sway and niri on Wayland. Macs can't build it, so GitHub does: `linux/packaging/package.sh` turns the binary built on Ubuntu 22.04 into `Snowhush-x86_64.AppImage`, `snowhush-x86_64.deb`, `snowhush-x86_64.rpm` and `snowhush-linux-x86_64.tar.gz`, the last for the AUR. A release without them, such as one made before, gets them from the workflow's "Run workflow" button with its tag.
+`linux/` is the Linux app in Rust, on the same `core/`, for KDE Plasma 6, Hyprland, Sway and niri on Wayland. Macs can't build it, so GitHub does: `linux/packaging/package.sh` turns the binary built on Ubuntu 22.04 into `Snowhush-x86_64.AppImage`, `snowhush-x86_64.deb`, `snowhush-x86_64.rpm` and `snowhush-linux-x86_64.tar.gz`, the last for the AUR. A release without them, such as one made before, gets them from the workflow's "Run workflow" button with its tag.
 
 After the packages are up, bring the AUR along: `linux/packaging/aur/update.sh <version>` sets the version and checksum in `linux/packaging/aur/PKGBUILD` and writes its `.SRCINFO`; copy both into the clone of `ssh://aur@aur.archlinux.org/snowhush-bin.git`, commit and push.
 

@@ -1,4 +1,5 @@
 mod chores;
+mod hyprland;
 mod kwin;
 mod light;
 mod log;
