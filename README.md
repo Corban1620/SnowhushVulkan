@@ -1,4 +1,4 @@
-### A full rewrite of SnowHush's OPENGL to Vulkan.
+### A full rewrite of SnowHush's OpenGL to Vulkan.
 #### Status: Still in development.
 
 
