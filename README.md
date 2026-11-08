@@ -1,5 +1,5 @@
 ### Snowhush's Linux renderer, rewritten from OpenGL ES to Vulkan.
-#### Status: Complete — Vulkan only, with no OpenGL in the drawing path.
+#### Status: Complete - Vulkan only, with no OpenGL in the drawing path.
 
 > **Compatibility**
 >
@@ -9,6 +9,7 @@
 > - Headless **Sway** was also verified using software Vulkan (llvmpipe). **Hyprland** and **niri** are expected to work, since the platform integration is unchanged, but were not re-tested after the rewrite.
 > - Other Linux distributions with a Vulkan 1.1+ driver and the usual Wayland libraries should work in principle, but only Arch-based Linux has been confirmed.
 > - AMD and NVIDIA GPUs were not tested; an Intel integrated GPU and llvmpipe were.
+> - Note that testing for AMD GPUs will be confirmed soon.
 
 
 <p align="center">
