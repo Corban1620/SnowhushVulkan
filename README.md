@@ -119,6 +119,8 @@ fallingOpacity=100
 | PSS average | 37.76 MiB | **14.12 MiB** | **−62.6%** |
 | PSS peak | 37.89 MiB | **14.18 MiB** | **−62.6%** |
 
+Note: This data is the Vulkan pipeline **with** the optimisations below
+
 For completeness, CPU over the same run was **4.09% → 3.90% of one core**, and per-process iGPU render-engine time was **2.18% → 2.26%**.
 
 ## Rewrite and optimizations
