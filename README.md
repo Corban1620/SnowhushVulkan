@@ -10,6 +10,8 @@
 > - Other Linux distributions with a Vulkan 1.1+ driver and the usual Wayland libraries should work in principle, but only Arch-based Linux has been confirmed.
 > - AMD and NVIDIA GPUs were not tested; an Intel integrated GPU and llvmpipe were.
 > - Note that testing for AMD GPUs will be confirmed soon.
+> - [Jump to Vulkan vs OpenGL ES Benchmark](#vulkan-vs-opengl-es)
+> - [Jump to Rewrite and Optimizations](#rewrite-and-optimizations)
 
 
 <p align="center">
